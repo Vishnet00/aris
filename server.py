@@ -159,7 +159,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        path = urlparse(self.path).path or "/index.html"
+        path = urlparse(self.path).path
+        if path == "/":
+            path = "/index.html"
         file_path = os.path.join(STATIC_DIR, path.lstrip("/"))
 
         if not os.path.abspath(file_path).startswith(STATIC_DIR):
