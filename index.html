@@ -602,7 +602,7 @@
 
   // ── Streaming typewriter ───────────────────────────────────────
 
-  function createStreamingMessage() {
+  function createBubbleBlock() {
     welcome.style.display = 'none';
     suggestions.style.display = 'none';
 
@@ -621,42 +621,75 @@
       el: msg,
       contentEl: msg.querySelector('.msg-content'),
       cursorEl: msg.querySelector('.streaming-cursor'),
-      bubble: msg.querySelector('.msg-bubble'),
       timeEl: msg.querySelector('.msg-time'),
       fullText: ''
     };
   }
 
-  async function streamText(streamObj, text, speed) {
-    // Cancel any previous stream
+  function finalizeBlock(block) {
+    block.cursorEl.remove();
+    block.timeEl.textContent = getTime();
+  }
+
+  async function streamBlocks(fullText, speed) {
     if (streamAborter) streamAborter.abort();
     const aborter = new AbortController();
     streamAborter = aborter;
     const signal = aborter.signal;
 
-    // Split into chunks: sentences and phrases for natural pacing
-    const chunks = text.match(/[^.!?\n]+[.!?\n]?\s*/g) || [text];
-    let displayText = '';
-
-    for (const chunk of chunks) {
-      if (signal.aborted) return;
-
-      // Each chunk appears word by word
-      const words = chunk.split(/(\s+)/);
-      for (const word of words) {
-        if (signal.aborted) return;
-        displayText += word;
-        streamObj.contentEl.innerHTML = escapeHtml(displayText);
-        streamObj.fullText = displayText;
-        scrollDown();
-        await new Promise(r => setTimeout(r, speed));
+    // Split into sentences
+    const sentences = fullText.match(/[^.!?\n]+[.!?\n]?/g) || [fullText];
+    
+    // Group into small blocks (1-2 sentences, max ~150 chars)
+    const blocks = [];
+    let current = '';
+    for (const s of sentences) {
+      const trimmed = s.trim();
+      if (!trimmed) continue;
+      if (current && (current.length + trimmed.length > 150 || 
+          (current.match(/[.!?]/g)||[]).length >= 2)) {
+        blocks.push(current.trim());
+        current = trimmed;
+      } else {
+        current += ' ' + trimmed;
       }
     }
+    if (current.trim()) blocks.push(current.trim());
 
-    // Remove cursor, finalize
-    streamObj.cursorEl.remove();
-    streamObj.timeEl.textContent = getTime();
+    // If only one block, just stream it
+    if (blocks.length <= 1) {
+      const block = createBubbleBlock();
+      await streamWords(block, blocks[0] || fullText, speed, signal);
+      finalizeBlock(block);
+      streamAborter = null;
+      return;
+    }
+
+    // Stream each block as its own bubble
+    for (let i = 0; i < blocks.length; i++) {
+      if (signal.aborted) return;
+      const block = createBubbleBlock();
+      await streamWords(block, blocks[i], speed, signal);
+      finalizeBlock(block);
+      // Small pause between blocks — feels like natural pacing
+      if (i < blocks.length - 1) {
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
     streamAborter = null;
+  }
+
+  async function streamWords(block, text, speed, signal) {
+    const words = text.split(/(\s+)/);
+    let display = '';
+    for (const word of words) {
+      if (signal.aborted) return;
+      display += word;
+      block.contentEl.innerHTML = escapeHtml(display);
+      block.fullText = display;
+      scrollDown();
+      await new Promise(r => setTimeout(r, speed));
+    }
   }
 
   // ── Message handling ───────────────────────────────────────────
@@ -736,12 +769,12 @@
       typing.classList.remove('active');
       sparkleBurst(15);
 
-      const streamObj = createStreamingMessage();
-      await streamText(streamObj, reply, 18); // 18ms per word — smooth reading pace
+      await streamBlocks(reply, 16);
 
       // Glitch on errors
+      const lastBlock = chatArea.querySelector('.msg.arris:last-of-type');
       if (reply.toLowerCase().includes('error')||reply.toLowerCase().includes('interference')){
-        streamObj.el.classList.add('glitch');
+        if (lastBlock) lastBlock.classList.add('glitch');
         setOrbState('error');
         setTimeout(()=>setOrbState('idle'),2000);
       }
